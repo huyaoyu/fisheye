@@ -1,0 +1,10 @@
+*.pyc
+*.png
+*.jbp
+*.code-workspace
+*.zip
+*.dat
+backup/
+Backup/
+data/
+Data/
