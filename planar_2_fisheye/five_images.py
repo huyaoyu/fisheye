@@ -9,6 +9,9 @@ import math
 from numba import (jit, cuda)
 import numpy as np
 
+# Local package.
+from planar_2_fisheye.planar_2_fisheye_base import Planar2Fisheye
+
 # -->       +---------+
 # |  x      |0,W      |0,2W
 # v         |    4    |
@@ -134,7 +137,7 @@ def k_sample_coor(
             output[0, i] = min( max( ( 1 - x/y ) / 2, 0 ), 1 ) + offsets[4]
             output[1, i] = min( max( ( 1 - z/y ) / 2, 0 ), 1 ) + offsets[9]
 
-class FivePlanar2Fisheye(object):
+class FivePlanar2Fisheye(Planar2Fisheye):
     def __init__(self, fov, shape, a, s, p):
         '''
         Arguments:
@@ -144,26 +147,7 @@ class FivePlanar2Fisheye(object):
         s (array): 2-by-2, the strech coefficients.
         p (array): 2-element, the principle point, x, y. 
         '''
-        super(FivePlanar2Fisheye, self).__init__()
-        
-        self.fov = fov # Degree.
-        self.shape = shape # H, W.
-
-        # https://www.mathworks.com/help/vision/ug/fisheye-calibration-basics.html#mw_f299f68d-403b-45e0-9de5-55203a09460d
-        # and 
-        # Scaramuzza, D., A. Martinelli, and R. Siegwart. "A Toolbox for Easy Calibrating Omnidirectional Cameras." Proceedings to IEEE International Conference on Intelligent Robots and Systems, (IROS). Beijing, China, October 7–15, 2006.
-        
-        # The polynomial coefficents.
-        self.a = a # a0, a2, a3, a4.
-
-        self.s = s # The Stretch matrix
-        self.invS = np.linalg.inv(self.s)
-        self.p = p.reshape((-1, 1)) # The principle point, x, y.
-
-        self.flagCuda = False
-
-    def enable_cuda(self):
-        self.flagCuda = True
+        super(FivePlanar2Fisheye, self).__init__(fov, shape, a, s, p)
 
     def make_image_cross(self, imgs):
         '''
@@ -203,37 +187,6 @@ class FivePlanar2Fisheye(object):
         canvas[ 0:H, 2*W, ... ] = imgs[1][0, ::-1, ...]
 
         return canvas
-
-    def mesh_grid_pixels(self, flagFlatten=False):
-        '''Get a mesh grid of the pixel coordinates. '''
-
-        x = np.arange( self.shape[1], dtype=np.int32 )
-        y = np.arange( self.shape[0], dtype=np.int32 )
-
-        xx, yy = np.meshgrid(x, y)
-
-        if ( flagFlatten ):
-            return xx.reshape((-1)), yy.reshape((-1))
-        else:
-            return xx, yy
-
-    def pixel_coor_2_distorted(self, pixelCoor):
-        '''
-        Arguments:
-        pixelCoor (array): 2 x n array, the pixel coordinates.
-
-        Returns:
-        distCoor (array): 2 x n array, the distorted coordinates.
-        '''
-
-        return self.invS @ (pixelCoor - self.p)
-
-    def distorted_2_perspective(self, distortedCoor):
-        rho = np.linalg.norm(distortedCoor, axis=0)
-        z = self.a[0] + self.a[1] * rho**2 + self.a[2] * rho**3 + self.a[3] * rho**4
-        z = z.reshape((1, -1)).astype(np.float32)
-
-        return np.concatenate( ( distortedCoor, z ), axis=0 )
 
     def sample_coor_cuda(self, 
         xyz, 
@@ -282,7 +235,7 @@ flagCuda = {self.flagCuda}
 
         assert( len(imgs) == 5 ), f'len(imgs) = {len(imgs)}'
 
-        # Make the image row.
+        # Make the image cross.
         imgCross = self.make_image_cross( imgs )
 
         # Get the original shape of the input images.
@@ -292,17 +245,10 @@ flagCuda = {self.flagCuda}
         # print(f'imgCross.shape = {imgCross.shape}')
         # print(f'W = {W}')
 
-        # The pixel coordinates.
-        xx, yy = self.mesh_grid_pixels(flagFlatten=True)
-        pixelCoor = np.stack( (xx, yy), axis=0 )
+        # The 3D coordinates of the hyper-surface.
+        xyz = self.get_xyz()
 
-        # The distorted coordinates.
-        distCoor = self.pixel_coor_2_distorted(pixelCoor).astype(np.float32)
-
-        # The a and b values.
-        xyz = self.distorted_2_perspective(distCoor)
-
-        # Row sample.
+        # Sample.
         if ( self.flagCuda ):
             m = self.sample_coor_cuda( xyz, fov=self.fov/180*np.pi )
         else:
@@ -311,7 +257,7 @@ flagCuda = {self.flagCuda}
         negativeX = m[0, :] < 0
         negativeY = m[1, :] < 0
         negative  = np.logical_and( negativeX, negativeY )
-        negative = negative.reshape(self.shape)
+        negative  = negative.reshape(self.shape)
 
         # print(f'm.max() = {m.max()}')
         # print(f'm.min() = {m.min()}')
