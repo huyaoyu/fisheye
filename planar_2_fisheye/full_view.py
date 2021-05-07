@@ -2,11 +2,9 @@
 # Author: 
 # Yaoyu Hu <yaoyuh@andrew.cmu.edu>
 # Date:
-# 2021-03-13
+# 2021-05-06
 
 import cv2
-import math
-from numba import (jit, cuda)
 import numpy as np
 
 # Local package.
