@@ -25,6 +25,9 @@ class FullView2Fisheye(Planar2Fisheye):
         '''
         super(FullView2Fisheye, self).__init__(fov, shape, a, s, p)
 
+        self.lon_lat = None
+        self.out_of_fov = None
+
     def get_lon_lat(self):
         # Get the xyz 3D coordinates of the 3D surface.
         xyz = self.get_xyz()
@@ -43,26 +46,45 @@ class FullView2Fisheye(Planar2Fisheye):
 
         return lon_lat, out_of_fov
 
-    def __call__(self, img, lon_shift=np.pi):
+    def pad(self, img):
+        H, W = img.shape[:2]
+        if ( img.ndim == 3 ):
+            padded = np.zeros((H+1, W+1, img.shape[2]), dtype=img.dtype)
+        else:
+            padded = np.zeros((H+1, W+1), dtype=img.dtype)
+
+        padded[:H, :W, ...] = img
+        padded[ H, :W, ...] = img[0, :, ...]
+        padded[:H,  W, ...] = img[:, 0, ...]
+        padded[-1, -1, ...] = 0.5 * ( padded[-1, -2, ...] + padded[-2, -1, ...] )
+        return padded
+
+    def __call__(self, img, lon_shift=np.pi, interpolation=cv2.INTER_LINEAR):
         # Get the shape of the input image.
         H, W = img.shape[:2]
 
         # Get the longitude and latitude coordinates.
         lon_lat, out_of_fov = self.get_lon_lat()
 
+        # Reshape out_of_fov.
+        self.out_of_fov = out_of_fov.reshape(self.shape)
+
         # Shift the longitude values.
         lon_lat[0, :] += lon_shift
+        self.lon_lat = lon_lat.copy().transpose().reshape([ *self.shape, 2 ])
         rewind_mask = lon_lat[0, :] >= 2 * np.pi
         lon_lat[0, rewind_mask] -= 2 * np.pi
 
         # Get the sample location.
-        sx = ( lon_lat[0, :] / ( 2 * np.pi ) * (W-1) ).reshape(self.shape)
-        sy = ( lon_lat[1, :] / np.pi * (H-1) ).reshape(self.shape)
+        # sx = ( lon_lat[0, :] / ( 2 * np.pi ) * (W-1) ).reshape(self.shape)
+        # sy = ( lon_lat[1, :] / np.pi * (H-1) ).reshape(self.shape)
+        sx = ( lon_lat[0, :] / ( 2 * np.pi ) * W ).reshape(self.shape)
+        sy = ( lon_lat[1, :] / np.pi * H ).reshape(self.shape)
+
+        # Pad.
+        padded = self.pad(img)
 
         # Sample.
-        sampled = cv2.remap(img, sx, sy, interpolation=cv2.INTER_LINEAR)
+        sampled = cv2.remap(padded, sx, sy, interpolation=cv2.INTER_LINEAR)
 
-        # FoV.
-        sampled[ out_of_fov.reshape(self.shape), : ] = 127
-
-        return sampled
+        return sampled, self.out_of_fov
